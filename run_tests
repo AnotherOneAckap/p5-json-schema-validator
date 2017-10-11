@@ -1,0 +1,5 @@
+#!/bin/sh
+for file in JSON-Schema-Test-Suite/tests/draft6/*.json
+do
+	perl run_test.pl $file
+done
