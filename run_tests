@@ -1,5 +1,2 @@
 #!/bin/sh
-for file in JSON-Schema-Test-Suite/tests/draft6/*.json
-do
-	perl run_test.pl $file
-done
+prove --exec "perl run_test" t/JSON-Schema-Test-Suite/draft6/*

@@ -65,6 +65,30 @@ sub dereference {
 	return $result;
 }
 
+# http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.1
+#
+# 6.1. multipleOf
+# The value of "multipleOf" MUST be a number, strictly greater than 0.
+# A numeric instance is valid only if division by this keyword's value results in an integer.
+
+sub validate_multipleOf {
+	my ( $value, $instance, $path, $errors, $root ) = @_;
+
+	die 'The value of "multipleOf" MUST be a number, strictly greater than 0. See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.1' unless is_number( $value ) && $value > 0;
+
+	return 1 unless is_number( $instance );
+
+	my $result = is_integer( $instance / $value );
+
+	unless ($result) {
+		$errors->{$path} ||= [];
+		push @{ $errors->{$path} }, "multipleOf";
+	}
+
+	warn "# multipleOf $result\n" if DBG;
+	return $result;
+}
+
 # http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.2
 #
 # 6.2. maximum
@@ -88,6 +112,29 @@ sub validate_maximum {
 	return $result;
 }
 
+# See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.3
+#
+# 6.3. exclusiveMaximum
+# The value of "exclusiveMaximum" MUST be number, representing an exclusive upper limit for a numeric instance.
+# If the instance is a number, then the instance is valid only if it has a value strictly less than (not equal to) "exclusiveMaximum".
+
+sub validate_exclusiveMaximum {
+	my ( $value, $instance, $path, $errors, $root ) = @_;
+
+	die 'The value of "exclusiveMaximum" MUST be a number, representing an exclusive upper limit for a numeric instance. See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.3' unless is_number( $value );
+
+	return 1 unless is_number( $instance );
+
+	my $result = $instance < $value;
+
+	unless ($result) {
+		$errors->{$path} ||= [];
+		push @{ $errors->{$path} }, "exclusiveMaximum";
+	}
+
+	return $result;
+}
+
 # See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.4
 #
 # 6.4. minimum
@@ -106,6 +153,29 @@ sub validate_minimum {
 	unless ($result) {
 		$errors->{$path} ||= [];
 		push @{ $errors->{$path} }, "minimum";
+	}
+
+	return $result;
+}
+
+# See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.5
+#
+# 6.5. exclusiveMinimum
+# The value of "exclusiveMinimum" MUST be number, representing an exclusive upper limit for a numeric instance.
+# If the instance is a number, then the instance is valid only if it has a value strictly greater than (not equal to) "exclusiveMinimum".
+
+sub validate_exclusiveMinimum {
+	my ( $value, $instance, $path, $errors, $root ) = @_;
+
+	die 'The value of "exclusiveMinimum" MUST be a number, representing an exclusive upper limit for a numeric instance. See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.5' unless is_number( $value );
+
+	return 1 unless is_number( $instance );
+
+	my $result = $instance > $value;
+
+	unless ($result) {
+		$errors->{$path} ||= [];
+		push @{ $errors->{$path} }, "exclusiveMinimum";
 	}
 
 	return $result;
@@ -173,6 +243,8 @@ sub validate_required {
 	my ( $value, $instance, $path, $errors ) = @_;
 
 	die 'The value of this keyword MUST be an array. Elements of this array, if any, MUST be strings, and MUST be unique. See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.17' unless is_array( $value );
+
+	return 1 unless is_object( $instance );
 
 	my $result = 1;
 
@@ -285,6 +357,62 @@ sub validate_additionalProperties {
 	return $result;
 }
 
+# See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.23
+#
+# 6.23. enum
+# The value of this keyword MUST be an array. This array SHOULD have at least one element. Elements in the array SHOULD be unique.
+# An instance validates successfully against this keyword if its value is equal to one of the elements in this keyword's array value.
+# Elements in the array might be of any value, including null.
+
+sub validate_enum {
+	my ( $value, $instance, $path, $errors, $root ) = @_;
+
+	die 'The value of this keyword MUST be an array. This array SHOULD have at least one element. Elements in the array SHOULD be unique. See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.23' unless is_array( $value ) && scalar @$value;
+
+	my $json = JSON->new->allow_nonref->canonical;
+	my %items = map { $json->encode( $_ ) => 1 } @$value;
+
+	my $result = 0;
+
+	my $encoded_instance = $json->encode( $instance );
+
+	for ( @$value ) {
+		$result = exists $items{ $encoded_instance };
+		last if $result;
+	}
+
+	unless ($result) {
+		$errors->{$path} ||= [];
+		push @{ $errors->{$path} }, 'enum';
+	}
+
+	warn "# enum $result\n" if DBG;
+	return $result;
+}
+
+# See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.24
+#
+# 6.24. const
+# The value of this keyword MAY be of any type, including null.
+# An instance validates successfully against this keyword if its value is equal to the value of the keyword.
+
+sub validate_const {
+	my ( $value, $instance, $path, $errors, $root ) = @_;
+
+	my $result = 0;
+	
+	my $json = JSON->new->allow_nonref->canonical;
+	$result = $json->encode( $value ) eq $json->encode( $instance );
+
+	unless ($result) {
+		$errors->{$path} ||= [];
+		push @{ $errors->{$path} }, 'const';
+	}
+
+	warn "# const $result\n" if DBG;
+	return $result;
+}
+
 # See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.25
 #
 # 6.25. type
@@ -295,7 +423,7 @@ sub validate_additionalProperties {
 sub validate_type {
 	my ( $value, $instance, $path, $errors, $root ) = @_;
 
-	my $result = 1;
+	my $result = 0;
 
 	my $type_validators = {
 		null    => \&is_null,
@@ -308,7 +436,7 @@ sub validate_type {
 	};
 
 	for my $v ( ref $value eq 'ARRAY' ? @$value : $value ) {
-		$result &&= $type_validators->{$value}->($instance);
+		$result ||= $type_validators->{$v}->($instance);
 		last if $result;
 	}
 
@@ -334,7 +462,7 @@ sub validate_allOf {
 	my $result = 1;
 
 	for my $subschema ( @$value ) {
-		$result &&= validate( $subschema, $instance, "$path.allOf", $errors, $root );# TODO
+		$result &&= validate( $subschema, $instance, "$path.allOf", $errors, $root );# TODO hack for path, because validate returns object for path $
 	}
 
 	warn "# allOf $result\n" if DBG;
@@ -355,11 +483,49 @@ sub validate_anyOf {
 	my $result = 0;
 
 	for my $subschema ( @$value ) {
-		$result = validate( $subschema, $instance, "$path.anyOf", $errors, $root );# TODO
+		$result = validate( $subschema, $instance, "$path.anyOf", $errors, $root );# TODO hack for path, because validate returns object for path $
 		last if $result;
 	}
 
+	unless ( $result ) {
+		$errors->{$path} ||= [];
+		push @{ $errors->{$path} }, 'anyOf';
+	}
+
 	warn "# anyOf $result\n" if DBG;
+	return $result;
+}
+
+# http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.28
+#
+# 6.28. oneOf
+# This keyword's value MUST be a non-empty array. Each item of the array MUST be a valid JSON Schema.
+# An instance validates successfully against this keyword if it validates successfully against exactly one schema defined by this keyword's value.
+
+sub validate_oneOf {
+	my ( $value, $instance, $path, $errors, $root ) = @_;
+
+	die "This keyword's value MUST be a non-empty array. Each item of the array MUST be a valid JSON Schema. See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.27" unless is_array( $value ) && scalar @$value;
+
+	my $result = 0;
+
+	for ( @$value ) {
+		my $res = validate( $_, $instance, "$path.oneOf", $errors, $root );# TODO hack for path, because validate returns object for path $
+
+		if ( $res ) {
+			if ( $result ) {
+				$result = 0;
+				$errors->{$path} ||= [];
+				push @{ $errors->{$path} }, 'oneOf';
+				last;
+			}
+			else {
+				$result = 1;
+			}
+		}
+	}
+
+	warn "# oneOf $result\n" if DBG;
 	return $result;
 }
 
@@ -466,6 +632,137 @@ sub validate_minItems {
 	push @{ $errors->{$path} }, 'minItems';
 
 	return 0;
+}
+
+# http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.13
+#
+# 6.13. uniqueItems
+# The value of this keyword MUST be a boolean.
+# If this keyword has boolean value false, the instance validates successfully. If it has boolean value true, the instance validates successfully if all of its elements are unique.
+# Omitting this keyword has the same behavior as a value of false.
+
+sub validate_uniqueItems {
+	my ( $value, $instance, $path, $errors, $root ) = @_;
+
+	die 'The value of this keyword MUST be a boolean. See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.13' unless is_boolean( $value );
+
+	return 1 unless $value;
+
+	return 1 unless is_array( $instance );
+
+	my $json = JSON->new->allow_nonref;
+
+	my %items = map { $json->encode($_) => 1 } @$instance;
+
+	my $result = scalar @$instance == scalar keys %items;
+
+	unless ( $result ) {
+		$errors->{$path} ||= [];
+		push @{ $errors->{$path} }, 'uniqueItems';
+	}
+
+	warn "# uniqueItems $result\n" if DBG;
+	return $result;
+}
+
+# http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.14
+#
+# 6.14. contains
+# The value of this keyword MUST be a valid JSON Schema.
+# An array instance is valid against "contains" if at least one of its elements is valid against the given schema.
+
+sub validate_contains {
+	my ( $value, $instance, $path, $errors, $root ) = @_;
+
+	die 'The value of this keyword MUST be a valid JSON Schema. See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.14' unless is_json_schema( $value );
+
+	return 1 unless is_array( $instance );
+
+	my $result = 0;
+
+	for ( my $i = 0; $i < scalar @$instance; $i++ ) {
+		$result = validate( $value, $instance->[$i], "$path.$i", $errors, $root );
+		last if $result;
+	}
+
+	unless ( $result ) {
+		$errors->{$path} ||= [];
+		push @{ $errors->{$path} }, 'contains';
+	}
+
+	warn "# contains $result\n" if DBG;
+	return $result;
+}
+
+# http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.15
+#
+# 6.15. maxProperties
+# The value of this keyword MUST be a non-negative integer.
+# An object instance is valid against "maxProperties" if its number of properties is less than, or equal to, the value of this keyword.
+
+sub validate_maxProperties {
+	my ( $value, $instance, $path, $errors, $root ) = @_;
+
+	die 'The value of this keyword MUST be a non-negative integer. See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.15' unless is_integer( $value ) && $value >= 0;
+
+	return 1 unless is_object( $instance );
+
+	my $result = scalar keys %$instance <= $value;
+
+	unless ( $result ) {
+		$errors->{$path} ||= [];
+		push @{ $errors->{$path} }, 'maxProperties';
+	}
+
+	warn "# maxProperties $result\n" if DBG;
+	return $result;
+}
+
+# http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.16
+#
+# 6.16. minProperties
+# The value of this keyword MUST be a non-negative integer.
+# An object instance is valid against "minProperties" if its number of properties is greater than, or equal to, the value of this keyword.
+# Omitting this keyword has the same behavior as a value of 0.
+
+sub validate_minProperties {
+	my ( $value, $instance, $path, $errors, $root ) = @_;
+
+	die 'The value of this keyword MUST be a non-negative integer. See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.15' unless is_integer( $value ) && $value >= 0;
+
+	return 1 unless is_object( $instance );
+
+	my $result = scalar keys %$instance >= $value;
+
+	unless ( $result ) {
+		$errors->{$path} ||= [];
+		push @{ $errors->{$path} }, 'minProperties';
+	}
+
+	warn "# minProperties $result\n" if DBG;
+	return $result;
+}
+
+# http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.29
+#
+# 6.29. not
+# This keyword's value MUST be a valid JSON Schema.
+# An instance is valid against this keyword if it fails to validate successfully against the schema defined by this keyword.
+
+sub validate_not {
+	my ( $value, $instance, $path, $errors, $root ) = @_;
+
+	die "This keyword's value MUST be a valid JSON Schema. See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.29" unless is_json_schema( $value );
+
+	my $result = not validate( $value, $instance, "$path.not", $errors, $root );# TODO
+
+	unless ( $result ) {
+		$errors->{$path} ||= [];
+		push @{ $errors->{$path} }, 'not';
+	}
+
+	warn "# not $result\n" if DBG;
+	return $result;
 }
 
 sub validate_true {

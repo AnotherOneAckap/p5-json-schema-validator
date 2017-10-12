@@ -31,7 +31,6 @@ for ( my $i = 0; $i < scalar @$test_cases; $i++ ) {
 	$tests_quantity += scalar @{$test_cases->[$i]{tests}};
 }
 
-
 plan tests => $tests_quantity;
 
 my $i = 0;
@@ -41,11 +40,12 @@ for ( my $i = 0; $i < scalar @$test_cases; $i++ ) {
 
 	my $test_case = $test_cases->[$i];
 
-	warn "# TEST CASE $test_case->{description}\n";
-
 	for my $t ( @{$test_case->{tests}} ) {
-		my $result = JSON::Schema::Validator::Draft6::validate( $test_case->{schema}, $t->{data} );
-		ok $result->{ok} == $t->{valid}, $t->{description};
+		SKIP: {
+			skip $t->{skip}, 1 if $t->{skip};
+			my $result = JSON::Schema::Validator::Draft6::validate( $test_case->{schema}, $t->{data} );
+			ok $result->{ok} == $t->{valid}, $t->{description};
+		}
 	}
 }
 
