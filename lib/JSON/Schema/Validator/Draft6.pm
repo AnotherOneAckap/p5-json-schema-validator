@@ -3,8 +3,9 @@ use strict;
 use warnings;
 use Data::Dumper;
 use JSON::PP::Boolean;
-use JSON qw( encode_json );
+use JSON qw( encode_json decode_json );
 use Scalar::Util qw( looks_like_number );
+use Furl;
 
 use constant DBG => 0;
 
@@ -27,6 +28,7 @@ sub validate {
 
 			if ( $keyword eq '$ref' ) {
 				$value = dereference( $schema->{$keyword}, $root );
+				$root = $value;
 				return validate( $value, $instance, $path, $errors, $root );
 			}
 			else {
@@ -56,11 +58,22 @@ sub validate {
 sub dereference {
 	my ( $ref, $schema ) = @_;
 
-	my @path = split '/', substr $ref, 2;
+	my $result;
 
-	my $result = $schema;
+	if ( $ref eq '#' ) {
+		$result = $schema;
+	}
+	elsif ( 'http' eq substr $ref, 0, 4 ) {
+		my $res = Furl->new->get( $ref );
+		$result = decode_json $res->body;
+	}
+	else {
+		my @path = split '/', substr $ref, 2;
 
-	$result = $result->{$_} for @path;
+		$result = $schema;
+
+		$result = $result->{$_} for @path;
+	}
 
 	return $result;
 }
@@ -763,6 +776,20 @@ sub validate_not {
 
 	warn "# not $result\n" if DBG;
 	return $result;
+}
+
+# http://json-schema.org/latest/json-schema-validation.html#rfc.section.7.1
+#
+# 7.1. definitions
+# This keyword's value MUST be an object. Each member value of this object MUST be a valid JSON Schema.
+# This keyword plays no role in validation per se. Its role is to provide a standardized location for schema authors to inline JSON Schemas into a more general schema.
+
+sub validate_definitions {
+	my ( $value, $instance, $path, $errors, $root ) = @_;
+
+	die "This keyword's value MUST be an object. Each member value of this object MUST be a valid JSON Schema. See http://json-schema.org/latest/json-schema-validation.html#rfc.section.7.1" unless is_object( $value );
+
+	return 1;
 }
 
 sub validate_true {
