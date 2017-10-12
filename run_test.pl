@@ -24,13 +24,22 @@ do {
 
 die "File $test_file doesn't contain array of tests" unless $test_cases && ref $test_cases eq 'ARRAY';
 
-plan tests => scalar @$test_cases;
+my $tests_quantity = 0;
+
+for ( my $i = 0; $i < scalar @$test_cases; $i++ ) {
+	next if defined $test_case_no && $i+1 != $test_case_no;
+	$tests_quantity += scalar @{$test_cases->[$i]{tests}};
+}
+
+
+plan tests => $tests_quantity;
 
 my $i = 0;
 
-for my $test_case ( @$test_cases ) {
-	$i++;
-	next if defined $test_case_no && $i != $test_case_no;
+for ( my $i = 0; $i < scalar @$test_cases; $i++ ) {
+	next if defined $test_case_no && $i+1 != $test_case_no;
+
+	my $test_case = $test_cases->[$i];
 
 	warn "# TEST CASE $test_case->{description}\n";
 
