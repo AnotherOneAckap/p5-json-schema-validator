@@ -44,7 +44,7 @@ for ( my $i = 0; $i < scalar @$test_cases; $i++ ) {
 		SKIP: {
 			skip $t->{skip}, 1 if $t->{skip};
 			my $result = JSON::Schema::Validator::Draft6::validate( $test_case->{schema}, $t->{data} );
-			ok $result->{ok} == $t->{valid}, $t->{description};
+			ok $result == $t->{valid}, $t->{description};
 		}
 	}
 }
