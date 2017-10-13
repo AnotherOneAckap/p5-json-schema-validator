@@ -400,6 +400,42 @@ sub validate_additionalProperties {
 	return $result;
 }
 
+# See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.21
+#
+# 6.21. dependencies
+# This keyword specifies rules that are evaluated if the instance is an object and contains a certain property.
+# This keyword's value MUST be an object. Each property specifies a dependency. Each dependency value MUST be an array or a valid JSON Schema.
+# If the dependency value is a subschema, and the dependency key is a property in the instance, the entire instance must validate against the dependency value.
+# If the dependency value is an array, each element in the array, if any, MUST be a string, and MUST be unique. If the dependency key is a property in the instance, each of the items in the dependency value must be a property that exists in the instance.
+# Omitting this keyword has the same behavior as an empty object.
+
+sub validate_dependencies {
+	my ( $value, $instance, $state ) = @_;
+
+	die "This keyword's value MUST be an object. Each property specifies a dependency. Each dependency value MUST be an array or a valid JSON Schema. See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.21" unless is_object( $value );
+
+	return $state unless is_object( $instance );
+
+	while ( my ( $name, $subschema ) = each %$value ) {
+		next unless exists $instance->{$name};
+
+		if ( is_json_schema( $subschema ) ) {
+			$state->add_path( $name );
+			$state->add_error( $state->{path} => 'dependencies' ) unless validate( $subschema, $instance, $state );
+		}
+		elsif ( is_array( $subschema ) ) {
+			my $res = 1;
+
+			for ( @$subschema ) {
+				$res &&= exists $instance->{$_};
+				$state->add_error( "$state->{path}.$_" => 'dependencies' ) unless $res;
+			}
+		}
+	}
+
+	return $state;
+}
+
 # See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.23
 #
 # 6.23. enum
