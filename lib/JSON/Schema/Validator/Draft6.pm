@@ -13,11 +13,10 @@ use constant DBG => 0;
 sub validate {
 	my ( $schema, $instance, $state ) = @_;
 
-	$state = JSON::Schema::Validator::State->new( schema => $schema ) unless $state;
+	$state = JSON::Schema::Validator::State->new( schema_root => $schema ) unless $state;
 
 	if ( is_object($schema) ) {
 		if ( $schema->{'$id'} ) {
-			$state->{schemas_by_id}{ $schema->{'$id'} } = $schema;
 			$state->{current_id} = $schema->{'$id'};
 		}
 
@@ -39,7 +38,7 @@ sub validate {
 						return validate( $value, $instance, $state )
 					}
 				}
-				else                          { $state->add_error( $state->{path}, '$ref' ); return $state; }
+				else { $state->add_error( $state->{path}, '$ref' ); return $state; }
 			}
 			else { $value = ref $schema eq 'HASH' ? $schema->{$keyword} : $keyword }
 
@@ -78,10 +77,8 @@ sub dereference {
 	if ( '#' eq substr $ref, 0, 1 ) {
 		$result = $state->{schema_root};
 
-		if ( $ref =~ m|#!?/| ) {
-			my @path = split '/', substr $ref, 2;
-
-			$result = $state->{schema_root};
+		if ( $ref =~ m|^#!?/(.+)$| ) {
+			my @path = split '/', $1;
 
 			for ( @path ) {
 				if ( is_object($result) ) {
@@ -99,11 +96,6 @@ sub dereference {
 	elsif ( 'http' eq substr $ref, 0, 4 ) {
 		my $res = Furl->new->get( $ref );
 		$result = decode_json $res->body;
-
-		if ( defined $result->{'$id'} ) {
-			$state->{schemas_by_id}{ $result->{'$id'} } = $result;
-		}
-
 		$state->{schemas_by_url}{$ref} = $result;
 	}
 	else {

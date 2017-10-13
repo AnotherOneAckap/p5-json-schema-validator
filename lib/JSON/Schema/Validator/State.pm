@@ -11,7 +11,7 @@ sub new {
 
 	my $state = {};
 	$state->{path}           = '$';
-	$state->{schema_root}    = $args{schema};
+	$state->{schema_root}    = $args{schema_root};
 	$state->{errors}         = {};
 	$state->{schemas_by_url} = {};
 	$state->{schemas_by_id}  = {};
@@ -45,18 +45,25 @@ sub id_lookup {
 	$schema ||= $state->{schema_root};
 	$seen   ||= {};
 
-	return unless defined $schema && ref $schema eq 'HASH';
+	return unless ref $schema eq 'HASH' || ref $schema eq 'ARRAY';
 
 	return if exists $seen->{$schema};
 
 	$seen->{$schema} = 1;
 
-	if ( exists $schema->{'$id'} ) {
-		$state->{schemas_by_id}{ $schema->{'$id'} } = $schema;
-	}
+	if ( ref $schema eq 'HASH' ) {
+		if ( exists $schema->{'$id'} ) {
+			$state->{schemas_by_id}{ $schema->{'$id'} } = $schema;
+		}
 
-	while ( my ( $k, $subschema ) = each %$schema ) {
-		$state->id_lookup( $subschema, $seen );
+		while ( my ( $k, $subschema ) = each %$schema ) {
+			$state->id_lookup( $subschema, $seen );
+		}
+	}
+	elsif ( ref $schema eq 'ARRAY' ) {
+		for ( @$schema ) {
+			$state->id_lookup( $_, $seen );
+		}
 	}
 }
 
