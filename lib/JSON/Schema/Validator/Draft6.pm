@@ -13,24 +13,35 @@ use constant DBG => 0;
 sub validate {
 	my ( $schema, $instance, $state ) = @_;
 
-	my $result = 1;
-
 	$state = JSON::Schema::Validator::State->new( schema => $schema ) unless $state;
 
 	if ( is_object($schema) ) {
+		if ( $schema->{'$id'} ) {
+			$state->{schemas_by_id}{ $schema->{'$id'} } = $schema;
+			$state->{current_id} = $schema->{'$id'};
+		}
+
 		my @keywords = sort keys %$schema;
 
 		for my $keyword (@keywords) {
 			my $value;
 
 			if ( $keyword eq '$ref' ) {
-				$value = dereference( $schema->{$keyword}, $state->{schema_root} );
-				$state->{schema_root} = $value;
-				return validate( $value, $instance, $state );
+				my $ref = $schema->{$keyword};
+				$value = dereference( $ref, $state );
+
+				if ( is_json_schema($value) ) {
+					if ( length $ref > 4 && 'http' eq substr $ref, 0, 4 ) {
+						return validate( $value, $instance )
+					}
+					else {
+						$schema = $value;
+						return validate( $value, $instance, $state )
+					}
+				}
+				else                          { $state->add_error( $state->{path}, '$ref' ); return $state; }
 			}
-			else {
-				$value = ref $schema eq 'HASH' ? $schema->{$keyword} : $keyword;
-			}
+			else { $value = ref $schema eq 'HASH' ? $schema->{$keyword} : $keyword }
 
 			no strict 'refs';
 			my %symbols_table = %{ __PACKAGE__ . '::' };
@@ -52,37 +63,68 @@ sub validate {
 		return $state;
 	}
 
-	die 'Not schema ', Data::Dumper::Dumper( $schema, $instance );
 	die "JSON Schema MUST be an object or a boolean. See http://json-schema.org/latest/json-schema-core.html#rfc.section.4.4";
 }
 
 sub dereference {
-	my ( $ref, $schema ) = @_;
+	my ( $ref, $state ) = @_;
+
+	if ( defined $state->{schemas_by_url}{$ref} || defined $state->{schemas_by_id}{$ref} ) {
+		return $state->{schemas_by_url}{$ref} || defined $state->{schemas_by_id}{$ref};
+	}
 
 	my $result;
 
-	if ( $ref eq '#' ) {
-		$result = $schema;
+	if ( '#' eq substr $ref, 0, 1 ) {
+		$result = $state->{schema_root};
+
+		if ( $ref =~ m|#!?/| ) {
+			my @path = split '/', substr $ref, 2;
+
+			$result = $state->{schema_root};
+
+			for ( @path ) {
+				if ( is_object($result) ) {
+					$result = $result->{unescape_json_path($_)};
+				}
+				elsif( is_array($result) ) {
+					$result = $result->[$_];
+				}
+				else {
+					die Data::Dumper::Dumper( join ( ' ', @path ), $result, $state->{schema_root} );
+				}
+			}
+		}
 	}
 	elsif ( 'http' eq substr $ref, 0, 4 ) {
 		my $res = Furl->new->get( $ref );
 		$result = decode_json $res->body;
+
+		if ( defined $result->{'$id'} ) {
+			$state->{schemas_by_id}{ $result->{'$id'} } = $result;
+		}
+
+		$state->{schemas_by_url}{$ref} = $result;
 	}
 	else {
-		my @path = split '/', substr $ref, 2;
+		my $uri = $state->{current_id};
+		my ( $scheme, $authority, $path, $query, $fragment ) =
+		$uri =~ m|(?:([^:/?#]+):)?(?://([^/?#]*))?([^?#]*)(?:\?([^#]*))?(?:#(.*))?|;
 
-		$result = $schema;
+		# absolute path
+		if ( '/' eq substr $ref, 0, 1 ) {
+			my $new_uri = "$scheme://$authority" . $ref;
 
-		for ( @path ) {
-			if ( is_object($result) ) {
-				$result = $result->{$_};
-			}
-			elsif( is_array($result) ) {
-				$result = $result->[$_];
-			}
-			else {
-				die Data::Dumper::Dumper( $result );
-			}
+			$result = $state->{schemas_by_id}{$new_uri};
+		}
+		# relative path
+		else {
+			my @path = split '/', $path;
+			$path[-1] = $ref;
+
+			my $new_uri = "$scheme://$authority" . join '/', @path;
+
+			$result = $state->{schemas_by_id}{$new_uri};
 		}
 	}
 
@@ -836,6 +878,16 @@ sub is_json_schema($) { is_object( $_[0] ) || is_boolean( $_[0] ) }
 sub debug {
 	my ( $check, $state ) = @_;
 	warn sprintf "# '%s' for %s is %s\n", $check, $state->{path}, $state ? 1 : 0;
+}
+
+sub unescape_json_path {
+	my ( $v ) = @_;
+
+	$v =~ s|~1|/|g;
+	$v =~ s|~0|~|g;
+	$v =~ s|%25|%|g;
+
+	return $v;
 }
 
 1;
