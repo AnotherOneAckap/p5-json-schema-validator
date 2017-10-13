@@ -11,7 +11,7 @@ sub new {
 
 	my $state = {};
 	$state->{path}   = '$';
-	$state->{root}   = $args{schema};
+	$state->{schema_root}   = $args{schema};
 	$state->{errors} = {};
 
 	bless $state, $proto;

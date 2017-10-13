@@ -17,8 +17,6 @@ sub validate {
 
 	$state = JSON::Schema::Validator::State->new( schema => $schema ) unless $state;
 
-	warn "# ", $state->{path}, encode_json $state->{errors}, "\n" if DBG;
-
 	if ( is_object($schema) ) {
 		my @keywords = sort keys %$schema;
 
@@ -26,8 +24,8 @@ sub validate {
 			my $value;
 
 			if ( $keyword eq '$ref' ) {
-				$value = dereference( $schema->{$keyword}, $state->{root} );
-				$state->{root} = $value;
+				$value = dereference( $schema->{$keyword}, $state->{schema_root} );
+				$state->{schema_root} = $value;
 				return validate( $value, $instance, $state );
 			}
 			else {
@@ -40,17 +38,21 @@ sub validate {
 			my $symbol        = $symbols_table{$method_name};
 
 			if ( defined $symbol && *{$symbol}{CODE} ) {
-				$result &&= $method_name->( $value, $instance, $state );
+				$method_name->( $value, $instance, $state );
 			}
 		}
-
+	
+		debug( 'validate', $state ) if DBG;
 		return $state;
 	}
 	elsif ( is_boolean($schema) ) {
-		$result = $schema ? validate_true( $schema, $instance, $state ) : validate_false( $schema, $instance, $state );
+		validate_boolean( $schema, $instance, $state );
+
+		debug( 'validate', $state ) if DBG;
 		return $state;
 	}
 
+	die 'Not schema ', Data::Dumper::Dumper( $schema, $instance );
 	die "JSON Schema MUST be an object or a boolean. See http://json-schema.org/latest/json-schema-core.html#rfc.section.4.4";
 }
 
@@ -71,7 +73,17 @@ sub dereference {
 
 		$result = $schema;
 
-		$result = $result->{$_} for @path;
+		for ( @path ) {
+			if ( is_object($result) ) {
+				$result = $result->{$_};
+			}
+			elsif( is_array($result) ) {
+				$result = $result->[$_];
+			}
+			else {
+				die Data::Dumper::Dumper( $result );
+			}
+		}
 	}
 
 	return $result;
@@ -92,9 +104,10 @@ sub validate_multipleOf {
 
 	my $result = is_integer( $instance / $value );
 
-	$state->add_error( $state, $state->{path} => "multipleOf" ) unless $result;
+	$state->add_error( $state->{path} => "multipleOf" ) unless $result;
 
-	warn "# multipleOf $result\n" if DBG;
+	debug( 'multipleOf', $state ) if DBG;
+
 	return $result;
 }
 
@@ -113,7 +126,7 @@ sub validate_maximum {
 
 	my $result = $instance <= $value;
 
-	$state->add_error( $state, $state->{path} => "maximum" ) unless $result;
+	$state->add_error( $state->{path} => "maximum" ) unless $result;
 
 	return $result;
 }
@@ -133,7 +146,7 @@ sub validate_exclusiveMaximum {
 
 	my $result = $instance < $value;
 
-	$state->add_error( $state, $state->{path} => "exclusiveMaximum" ) unless $result;
+	$state->add_error( $state->{path} => "exclusiveMaximum" ) unless $result;
 
 	return $result;
 }
@@ -149,13 +162,13 @@ sub validate_minimum {
 
 	die 'The value of "minimum" MUST be a number, representing an inclusive upper limit for a numeric instance. See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.4' unless is_number( $value );
 
-	return 1 unless is_number( $instance );
+	return $state unless is_number( $instance );
 
 	my $result = $instance >= $value;
 
-	$state->add_error( $state, $state->{path} => "minimum" ) unless $result;
+	$state->add_error( $state->{path} => "minimum" ) unless $result;
 
-	return $result;
+	return $state;
 }
 
 # See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.5
@@ -173,7 +186,7 @@ sub validate_exclusiveMinimum {
 
 	my $result = $instance > $value;
 
-	$state->add_error( $state, $state->{path} => "exclusiveMinimum" ) unless $result;
+	$state->add_error( $state->{path} => "exclusiveMinimum" ) unless $result;
 
 	return $result;
 }
@@ -194,9 +207,10 @@ sub validate_maxLength {
 
 	my $result = length $instance <= $value;
 
-	$state->add_error( $state, $state->{path} => "maxLength" ) unless $result;
+	$state->add_error( $state->{path} => "maxLength" ) unless $result;
 
-	warn "# maxLength $result\n" if DBG;
+	debug( 'maxLength', $state ) if DBG;
+
 	return $result;
 }
 
@@ -217,9 +231,10 @@ sub validate_minLength {
 
 	my $result = length $instance >= $value;
 
-	$state->add_error( $state, $state->{path} => "minLength" ) unless $result;
+	$state->add_error( $state->{path} => "minLength" ) unless $result;
 
-	warn "# minLength $result\n" if DBG;
+	debug( 'minLength', $state ) if DBG;
+
 	return $result;
 }
 
@@ -241,11 +256,12 @@ sub validate_required {
 
 	for my $name (@$value) {
 		next if exists $instance->{$name};
-		$state->add_error( $state, "$state->{path}.$name" => "required" );
+		$state->add_error( "$state->{path}.$name" => "required" );
 		$result = 0;
 	}
 
-	warn "# required $result\n" if DBG;
+	debug( 'required', $state ) if DBG;
+
 	return $result;
 }
 
@@ -277,7 +293,8 @@ sub validate_properties {
 		# else skip validation
 	}
 
-	warn "# properties $result\n" if DBG;
+	debug( 'properties', $state ) if DBG;
+
 	return $result;
 }
 
@@ -305,13 +322,13 @@ sub validate_patternProperties {
 			if ( $name =~ $qr ) {
 				$state->add_path( $name );
 				my $res = validate( $subschema, $instance->{$name}, $state );
-				warn sprintf "validate_patternProperties $name %s %s $res\n", ( ref $instance->{$name} ? encode_json($instance->{$name}) : $instance->{$name} ), ( ref $subschema ? encode_json( $subschema ) : $subschema ) if DBG;
 				$result &&= $res;
 			}
 		}
 	}
 
-	warn "# patternProperties $result\n" if DBG;
+	debug( 'patternProperties', $state ) if DBG;
+
 	return $result;
 }
 
@@ -333,19 +350,19 @@ sub validate_additionalProperties {
 
 	my $result = 1;
 
-	my %properties = %{$state->{root}{properties} || {}};
-	my @pattern_properties = keys %{$state->{root}{patternProperties} || {}};
+	my %properties = %{$state->{schema_root}{properties} || {}};
+	my @pattern_properties = keys %{$state->{schema_root}{patternProperties} || {}};
 
 	for my $name ( keys %$instance ) {
 		next if exists $properties{ $name };
 		next if grep { $name =~ qr/$_/ } @pattern_properties;
 		$state->add_path( $name );
 		my $res = validate( $value, $instance->{$name}, $state );
-		warn sprintf "# validate_additionalProperties $name %s %s $res\n", encode_json([$instance->{$name}]), encode_json([ $value ]) if DBG;
 		$result &&= $res;
 	}	
 
-	warn "# additionalProperties $result\n" if DBG;
+	debug( 'additionalProperties', $state ) if DBG;
+
 	return $result;
 }
 
@@ -373,9 +390,10 @@ sub validate_enum {
 		last if $result;
 	}
 
-	$state->add_error( $state, $state->{path} => 'enum' ) unless $result;
+	$state->add_error( $state->{path} => 'enum' ) unless $result;
 
-	warn "# enum $result\n" if DBG;
+	debug( 'enum', $state ) if DBG;
+
 	return $result;
 }
 
@@ -393,9 +411,10 @@ sub validate_const {
 	my $json = JSON->new->allow_nonref->canonical;
 	$result = $json->encode( $value ) eq $json->encode( $instance );
 
-	$state->add_error( $state, $state->{path} => 'const' ) unless $result;
+	$state->add_error( $state->{path} => 'const' ) unless $result;
 
-	warn "# const $result\n" if DBG;
+	debug( 'const', $state ) if DBG;
+
 	return $result;
 }
 
@@ -426,7 +445,7 @@ sub validate_type {
 		last if $result;
 	}
 
-	$state->add_error( $state, $state->{path} => 'type' ) unless $result;
+	$state->add_error( $state->{path} => 'type' ) unless $result;
 
 	return $result;
 }
@@ -448,7 +467,8 @@ sub validate_allOf {
 		$result &&= validate( $subschema, $instance, $state );
 	}
 
-	warn "# allOf $result\n" if DBG;
+	debug( 'allOf', $state ) if DBG;
+
 	return $result;
 }
 
@@ -466,13 +486,14 @@ sub validate_anyOf {
 	my $result = 0;
 
 	for my $subschema ( @$value ) {
-		$result = validate( $subschema, $instance, $state );
+		$result = validate( $subschema, $instance, JSON::Schema::Validator::State->new( path => $state->{path}, schema_root => $state->{schema_root} ) );
 		last if $result;
 	}
 
-	$state->add_error( $state, $state->{path} => 'anyOf' ) unless $result;
+	$state->add_error( $state->{path} => 'anyOf' ) unless $result;
 
-	warn "# anyOf $result\n" if DBG;
+	debug( 'anyOf', $state ) if DBG;
+
 	return $result;
 }
 
@@ -490,12 +511,11 @@ sub validate_oneOf {
 	my $result = 0;
 
 	for ( @$value ) {
-		my $res = validate( $_, $instance, $state );
+		my $res = validate( $_, $instance, JSON::Schema::Validator::State->new( path => $state->{path}, schema_root => $state->{schema_root} ) );
 
 		if ( $res ) {
 			if ( $result ) {
 				$result = 0;
-				$state->add_error( $state, $state->{path} => 'oneOf' );
 				last;
 			}
 			else {
@@ -504,8 +524,29 @@ sub validate_oneOf {
 		}
 	}
 
-	warn "# oneOf $result\n" if DBG;
-	return $result;
+	$state->add_error( $state->{path} => 'oneOf' ) unless $result;
+
+	debug( 'oneOf', $state ) if DBG;
+
+	return $state;
+}
+
+# http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.8
+#
+# 6.8. pattern
+# The value of this keyword MUST be a string. This string SHOULD be a valid regular expression, according to the ECMA 262 regular expression dialect.
+# A string instance is considered valid if the regular expression matches the instance successfully. Recall: regular expressions are not implicitly anchored.
+
+sub validate_pattern {
+	my ( $value, $instance, $state ) = @_;
+
+	die 'The value of this keyword MUST be a string. This string SHOULD be a valid regular expression, according to the ECMA 262 regular expression dialect. See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.8' unless is_string( $value );
+
+	return $state unless is_string( $instance );
+
+	$state->add_error( $state->{path} => 'pattern' ) unless $instance =~ qr/$value/;
+
+	return $state;
 }
 
 # http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.9
@@ -530,7 +571,8 @@ sub validate_items {
 			$result &&= validate( $value, $instance->[$i], $state );
 		}
 
-		warn "# items $result\n" if DBG;
+		debug( 'items', $state ) if DBG;
+
 		return $result;
 	}
 	elsif ( is_array( $value ) ) {
@@ -540,7 +582,8 @@ sub validate_items {
 			$result &&= validate( $value->[$i], $instance->[$i], $state );
 		}
 
-		warn "# items $result\n" if DBG;
+		debug( 'items', $state ) if DBG;
+
 		return $result;
 	}
 
@@ -561,11 +604,11 @@ sub validate_additionalItems {
 
 	die 'The value of "additionalItems" MUST be a valid JSON Schema. See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.10' unless is_json_schema( $value );
 
-	return 1 unless is_array( $state->{root}{items} ) && is_array( $instance );
+	return 1 unless is_array( $state->{schema_root}{items} ) && is_array( $instance );
 
 	my $result = 1;
 
-	for ( my $i = scalar @{$state->{root}{items}}; $i < scalar @$instance; $i++ ) {
+	for ( my $i = scalar @{$state->{schema_root}{items}}; $i < scalar @$instance; $i++ ) {
 		$state->add_path( $i );
 		$result &&= validate( $value, $instance->[$i], $state );
 	}
@@ -588,7 +631,7 @@ sub validate_maxItems {
 
 	return 1 if scalar @$instance <= $value;
 
-	$state->add_error( $state, $state->{path} => 'maxItems' );
+	$state->add_error( $state->{path} => 'maxItems' );
 
 	return 0;
 }
@@ -609,7 +652,7 @@ sub validate_minItems {
 
 	return 1 if scalar @$instance >= $value;
 
-	$state->add_error( $state, $state->{path} => 'minItems' );
+	$state->add_error( $state->{path} => 'minItems' );
 
 	return 0;
 }
@@ -636,9 +679,10 @@ sub validate_uniqueItems {
 
 	my $result = scalar @$instance == scalar keys %items;
 
-	$state->add_error( $state, $state->{path} => 'uniqueItems' ) unless $result;
+	$state->add_error( $state->{path} => 'uniqueItems' ) unless $result;
 
-	warn "# uniqueItems $result\n" if DBG;
+	debug( 'uniqueItems', $state ) if DBG;
+
 	return $result;
 }
 
@@ -658,14 +702,14 @@ sub validate_contains {
 	my $result = 0;
 
 	for ( my $i = 0; $i < scalar @$instance; $i++ ) {
-		$state->add_path( $i );
-		$result = validate( $value, $instance->[$i], $state );
+		$result = validate( $value, $instance->[$i], JSON::Schema::Validator::State->new( path => "$state->{path}.$i", schema_root => $state->{schema_root} ) );
 		last if $result;
 	}
 
-	$state->add_error( $state, $state->{path} => 'contains' ) unless $result;
+	$state->add_error( $state->{path} => 'contains' ) unless $result;
 
-	warn "# contains $result\n" if DBG;
+	debug( 'contains', $state, $result ) if DBG;
+
 	return $result;
 }
 
@@ -684,9 +728,10 @@ sub validate_maxProperties {
 
 	my $result = scalar keys %$instance <= $value;
 
-	$state->add_error( $state, $state->{path} => 'maxProperties' ) unless $result;
+	$state->add_error( $state->{path} => 'maxProperties' ) unless $result;
 
-	warn "# maxProperties $result\n" if DBG;
+	debug( 'maxProperties', $state ) if DBG;
+
 	return $result;
 }
 
@@ -706,9 +751,10 @@ sub validate_minProperties {
 
 	my $result = scalar keys %$instance >= $value;
 
-	$state->add_error( $state, $state->{path} => 'minProperties' ) unless $result;
+	$state->add_error( $state->{path} => 'minProperties' ) unless $result;
 
-	warn "# minProperties $result\n" if DBG;
+	debug( 'minProperties', $state ) if DBG;
+
 	return $result;
 }
 
@@ -723,11 +769,13 @@ sub validate_not {
 
 	die "This keyword's value MUST be a valid JSON Schema. See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.29" unless is_json_schema( $value );
 
-	my $result = not validate( $value, $instance, $state );
+	# need new state here to ignore errors, that can be found inside
+	my $result = not validate( $value, $instance, JSON::Schema::Validator::State->new( path => $state->{path}, schema_root => $state->{schema_root} ) );
 
-	$state->add_error( $state, $state->{path} => 'not' ) unless $result;
+	$state->add_error( $state->{path} => 'not' ) unless $result;
 
-	warn "# not $result\n" if DBG;
+	debug( 'not', $state ) if DBG;
+
 	return $result;
 }
 
@@ -745,20 +793,18 @@ sub validate_definitions {
 	return 1;
 }
 
-sub validate_true {
+sub validate_boolean {
 	my ( $value, $instance, $state ) = @_;
 
-	warn "# true 1\n" if DBG;
-	return 1;
-}
-
-sub validate_false {
-	my ( $value, $instance, $state ) = @_;
-
-	$state->add_error( $state, $state->{path} => 'false' );
-
-	warn "# false 0\n" if DBG;
-	return 0;
+	if ( $value ) {
+		debug( 'true', $state ) if DBG;
+		return $state;
+	}
+	else {
+		$state->add_error( $state->{path} => 'false' );
+		debug( 'false', $state ) if DBG;
+		return $state;
+	}
 }
 
 # Primitive type validators
@@ -772,22 +818,24 @@ sub is_array($)  { defined $_[0] && ref $_[0] && ref $_[0] eq 'ARRAY' }
 
 sub is_number($) {
 	my $result = defined $_[0] && ! ref $_[0] && looks_like_number $_[0];
-	warn "# number $result\n" if DBG;
 	return $result;
 }
 
 sub is_integer($) {
 	my $result = defined $_[0] && ! ref $_[0] && looks_like_number $_[0] && $_[0] =~ /^[+-]?\d+$/;
-	warn "# integer $result\n" if DBG;
 	return $result;
 }
 
 sub is_string($)  {
 	my $result = defined $_[0] && ! ref $_[0] && ! looks_like_number $_[0];
-	warn "# string $result\n" if DBG;
 	return $result;
 }
 
 sub is_json_schema($) { is_object( $_[0] ) || is_boolean( $_[0] ) }
+
+sub debug {
+	my ( $check, $state ) = @_;
+	warn sprintf "# '%s' for %s is %s\n", $check, $state->{path}, $state ? 1 : 0;
+}
 
 1;
