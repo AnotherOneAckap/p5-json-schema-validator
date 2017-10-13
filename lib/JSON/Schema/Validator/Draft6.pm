@@ -436,6 +436,27 @@ sub validate_dependencies {
 	return $state;
 }
 
+# See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.22
+#
+# 6.22. propertyNames
+# The value of "propertyNames" MUST be a valid JSON Schema.
+# If the instance is an object, this keyword validates if every property name in the instance validates against the provided schema. Note the property name that the schema is testing will always be a string.
+# Omitting this keyword has the same behavior as an empty schema.
+
+sub validate_propertyNames {
+	my ( $value, $instance, $state ) = @_;
+
+	die 'The value of "propertyNames" MUST be a valid JSON Schema. See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.22' unless is_json_schema( $value );
+
+	return $state unless is_object( $instance );
+
+	for my $name ( keys %$instance ) {
+		$state->add_error( "$state->{path}.$name" => 'propertyNames') unless validate( $value, $name );
+	}
+
+	return $state;
+}
+
 # See http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.23
 #
 # 6.23. enum
